@@ -21,9 +21,15 @@ rand-int = Math.floor . random
 
 load-image = (src, λ) ->
   i = new Image
-  i.onload = λ
+  i.onload = -> λ this
   i.src = src
 
+render-svg = (img, size) ->
+  canvas = document.create-element \canvas
+  canvas.width = size; canvas.height = size
+  ctx = canvas.get-context \2d
+  ctx.draw-image img, 0, 0, size, size
+  canvas
 
 #
 # GL Helpers
@@ -96,109 +102,137 @@ draw-with-kernel = (gl, uniform-pointer, kernel) ->
   gl.draw-arrays gl.TRIANGLES, 0, 6
 
 
-# Load image
-load-image \leaves.jpg, ->
+# Create video
 
-  # Get A WebGL context
-  canvas = document.create-element \canvas
-  canvas <<< { width: 512, height: 512 }
-  gl = canvas.get-context \experimental-webgl
+video = document.create-element \video
+video.preload = \auto
+video.muted = yes
+video.src = \chaos.webm
+video-done = -> video.seek 0; video.play!
+video.add-event-listener \canplaythrough, video~play, on
+video.add-event-listener \ended, video-done, on
 
-  # Commit canvas to DOM
-  document.body.append-child canvas
 
-  # Receive image from loaded callback
-  image = this
+# Load images
 
-  # Setup a GLSL program
-  vertex   = load-shader gl, vertex-shader,   gl.VERTEX_SHADER
-  fragment = load-shader gl, fragment-shader, gl.FRAGMENT_SHADER
-  program  = create-program gl, [ vertex, fragment ]
-  gl.use-program program
+img-bg <- load-image \tree.jpg
+img-svg <- load-image \aviary.svg
 
-  # Look up where the vertex data needs to go.
-  color-location        = gl.get-uniform-location program, 'u_color'
-  tex-coord-location    = gl.get-attrib-location  program, 'a_texCoord'
-  position-location     = gl.get-attrib-location  program, 'a_position'
-  resolution-location   = gl.get-uniform-location program, 'u_resolution'
-  texture-size-location = gl.get-uniform-location program, 'u_textureSize'
-  kernel-location       = gl.get-uniform-location program, 'u_kernel[0]'
-  flip-y-location       = gl.get-uniform-location program, 'u_flipY'
+img-logo = render-svg img-svg, 2048
 
-  # Supply canvas resolution
-  gl.uniform2f resolution-location, canvas.width, canvas.height
-  gl.uniform2f texture-size-location, image.width, image.height
+# Get A WebGL context
+canvas = document.create-element \canvas
+canvas <<< { width: 512, height: 512 }
+gl = canvas.get-context \experimental-webgl
 
-  # Prepare texture buffer
-  tex-coord-buffer  = gl.create-buffer!
-  gl.bind-buffer gl.ARRAY_BUFFER, tex-coord-buffer
-  gl.buffer-data gl.ARRAY_BUFFER, (new Float32Array [ 0 0 1 0 0 1 0 1 1 0 1 1 ]), gl.STATIC_DRAW
-  gl.enable-vertex-attrib-array tex-coord-location
-  gl.vertex-attrib-pointer tex-coord-location, 2, gl.FLOAT, false, 0, 0
+# Commit canvas to DOM
+document.body.append-child canvas
 
-  # First state (input) texture
-  input-texture = create-texture gl
-  gl.tex-image2D gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image
+# Setup a GLSL program
+vertex   = load-shader gl, vertex-shader,   gl.VERTEX_SHADER
+fragment = load-shader gl, fragment-shader, gl.FRAGMENT_SHADER
+program  = create-program gl, [ vertex, fragment ]
+gl.use-program program
 
-  # Extra framebuffers
-  kernels      = [ convolution.normal, convolution.gaussianBlur3, convolution.unsharpen, convolution.emboss ]
-  textures     = []
-  framebuffers = []
+# Look up locations of shader parameters
+color-location        = gl.get-uniform-location program, 'u_color'
+tex-coord-location    = gl.get-attrib-location  program, 'a_texCoord'
+position-location     = gl.get-attrib-location  program, 'a_position'
+resolution-location   = gl.get-uniform-location program, 'u_resolution'
+texture-size-location = gl.get-uniform-location program, 'u_screenSize'
+kernel-location       = gl.get-uniform-location program, 'u_kernel[0]'
+big-kernel-location   = gl.get-uniform-location program, 'u_bigKernel[0]'
+flip-y-location       = gl.get-uniform-location program, 'u_flipY'
+blur-radius-location  = gl.get-uniform-location program, 'u_blurRadius'
+nudge-location        = gl.get-uniform-location program, 'u_nudge'
 
-  # Generate two framebuffers to ping-pong each shader pass
-  for i from 0 to 2
-    break
-    # Make texture
-    textures.push texture = create-texture gl
-    gl.tex-image2D gl.TEXTURE_2D, 0, gl.RGBA, 512, 512, 0, gl.RGBA, gl.UNSIGNED_BYTE, null
 
-    # Make FBO
-    framebuffers.push fbo = gl.create-framebuffer!
-    gl.bind-framebuffer gl.FRAMEBUFFER, fbo
-    gl.framebuffer-texture2D gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0
-
-  # Bind textures
-  gl.bind-texture gl.TEXTURE_2D, input-texture
-  gl.uniform1f flip-y-location, 1
-
-  # Ping-pong framebuffers to render to
-#  for kernel, i in kernels
-#    if i is 0 then continue
-#    set-framebuffer  gl, resolution-location, framebuffers[i % 2], 512, 512
-#    draw-with-kernel gl, kernel-location, kernel
-#    gl.bind-texture gl.TEXTURE_2D, textures[i % 2]
+#
+# Set Uniforms
 #
 
-  gl.uniform1f flip-y-location, -1
-  #set-framebuffer  gl, resolution-location, null, canvas.width, canvas.height
+# Supply canvas resolution
+gl.uniform2f resolution-location, canvas.width, canvas.height
+gl.uniform2f texture-size-location, img-bg.width, img-bg.height
+gl.uniform1f flip-y-location, -1
+gl.uniform1f blur-radius-location, 5
 
-  # Convolution Kernels
-  gl.uniform1fv kernel-location, convolution.box-blur
-  draw-with-kernel gl, kernel-location, kernels.0
+# Set convolution options
+gl.uniform1fv kernel-location, convolution.gaussianBlur3
+gl.uniform1fv big-kernel-location, convolution.box25
 
-  return
 
-  # Frame Loop
-  t = Date.now!
-  time = 0
-  stopped = no
+#
+# Create textures
+#
 
-  frame = ->
-    if not stopped then raf frame
+# Background
+texture-location0 = gl.get-uniform-location program, 'u_bgTexture'
+bg-texture = gl.create-texture!
+gl.active-texture gl.TEXTURE0
+gl.uniform1i texture-location0, 0
+gl.bind-texture gl.TEXTURE_2D, bg-texture
+gl.tex-parameteri gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE
+gl.tex-parameteri gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE
+gl.tex-parameteri gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR
+gl.tex-parameteri gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR
+gl.tex-image2D gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img-bg
 
-    Δt = ((now = Date.now!) - t) / 1000
-    time += Δt
-    t := now
-    x  = 100 + 100 * Math.sin time
-    y  = 100 + 100 * Math.cos time
+# Logo Mask
+texture-location1 = gl.get-uniform-location program, 'u_logoTexture'
+gl.active-texture gl.TEXTURE1
+gl.uniform1i texture-location1, 1
+logo-texture = gl.create-texture!
+gl.bind-texture gl.TEXTURE_2D, logo-texture
+gl.tex-parameteri gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE
+gl.tex-parameteri gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE
+gl.tex-parameteri gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR
+gl.tex-parameteri gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR
+gl.tex-image2D gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img-logo
 
-    buffer = gl.create-buffer!
-    gl.bind-buffer gl.ARRAY_BUFFER, buffer
-    gl.enable-vertex-attrib-array position-location
-    gl.vertex-attrib-pointer position-location, 2, gl.FLOAT, false, 0, 0
-    set-rectangle gl, x, y, 300, 300
+# Create on-the-fly texture updater
+update-bg = (source) ->
+  gl.active-texture gl.TEXTURE0
+  gl.bind-texture gl.TEXTURE_2D, bg-texture
+  gl.tex-image2D gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source
 
-    gl.draw-arrays gl.TRIANGLES, 0, 6
 
-  frame!
+
+#
+# Prepare vertex buffers
+#
+
+# Prepare texture coordinates
+tex-coord-buffer  = gl.create-buffer!
+gl.bind-buffer gl.ARRAY_BUFFER, tex-coord-buffer
+gl.buffer-data gl.ARRAY_BUFFER, (new Float32Array [ 0 0 1 0 0 1 0 1 1 0 1 1 ]), gl.STATIC_DRAW
+gl.enable-vertex-attrib-array tex-coord-location
+gl.vertex-attrib-pointer tex-coord-location, 2, gl.FLOAT, false, 0, 0
+
+# Prepare  Bind textures
+buffer = gl.create-buffer!
+gl.bind-buffer gl.ARRAY_BUFFER, buffer
+gl.enable-vertex-attrib-array position-location
+gl.vertex-attrib-pointer position-location, 2, gl.FLOAT, false, 0, 0
+set-rectangle gl, 0, 0, canvas.width, canvas.height
+
+
+# Frame Loop
+t     = Date.now!
+time  = 0
+stop  = no
+frame = ->
+  if not stop then raf frame
+  Δt = ((now = Date.now!) - t) / 500
+  time += Δt
+  t := now
+  x  = 0.5 + Math.sin time
+  y  = 0.5 + Math.cos time
+  k  = Math.floor(time) % 4
+  #set-rectangle gl, x, y, canvas.width, canvas.height
+  #gl.uniform2f nudge-location, x, y
+  #update-bg video
+  gl.draw-arrays gl.TRIANGLES, 0, 6
+
+frame!
 
