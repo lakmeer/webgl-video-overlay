@@ -88,13 +88,16 @@ void main() {
     weight = kernelWeight25(u_bigKernel);
   }
 
-  vec4 bgBlur     = vec4((sum / weight).rgb, 1.0);
+  //vec4 bgBlur     = vec4((sum / weight).rgb, 1.0);
   vec4 bgColor    = texture2D(u_bgTexture, v_texCoord + nudge);
   //vec4 extraColor = texture2D(u_extraTexture, v_texCoord);
   vec4 logoColor  = texture2D(u_logoTexture, v_texCoord);
 
   vec4 mask       = invert(logoColor);
 
-  gl_FragColor = mask * overlay + mask * bgBlur + logoColor * bgColor;
+  gl_FragColor =
+    mask * overlay +
+    mask * bgColor +
+    logoColor * bgColor;
 }
 
